@@ -1,0 +1,10 @@
+{
+  "name": "lojinha-local",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "python server.py",
+    "test": "python -m unittest discover -s tests -v && node --test tests/branding.test.mjs"
+  },
+  "type": "module"
+}
