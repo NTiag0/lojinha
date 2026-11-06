@@ -4,7 +4,7 @@ A aplicação pode rodar online sem depender do computador. O modo local continu
 
 ## Configuração pronta
 
-`render.yaml` define um serviço Python, com uma única instância, um disco persistente de 1 GB e verificação de saúde em `/healthz`. O plano especificado é pago. A criação/aplicação deve ser aprovada após conferir o orçamento no Render.
+`render.yaml` define um serviço Python gratuito, com uma única instância e verificação de saúde em `/healthz`. O serviço usa um banco PostgreSQL externo, como o Neon Free. O app pode hibernar após um período sem acesso, e o primeiro acesso seguinte pode demorar. Confira as cotas de uso dos planos gratuitos.
 
 O serviço usa `PORT` e aceita conexões no endereço de hospedagem. A origem pública é lida de `RENDER_EXTERNAL_HOSTNAME`; para domínio próprio, configure `LOJINHA_PUBLIC_URL` com a origem HTTPS exata, por exemplo `https://loja.exemplo.com`.
 
@@ -19,19 +19,19 @@ Execute `python tools/prepare_access.py` para gerar o acesso inicial. O script c
 
 Esses arquivos ficam fora do Git. Nenhuma senha ou banco de dados deve ser enviado ao repositório.
 
-No Render, configure `LOJINHA_ADMIN_USER` e `LOJINHA_ADMIN_PASSWORD_HASH` com os valores do arquivo privado. O Blueprint exige que o hash seja fornecido antes de aplicar a publicação. A URL pública só será confirmada após o serviço terminar a implantação e passar na verificação de saúde.
+No Render, configure `LOJINHA_ADMIN_USER` e `LOJINHA_ADMIN_PASSWORD_HASH` com os valores do arquivo privado. Configure `LOJINHA_DATABASE_URL` com a conexão PostgreSQL do projeto Neon e `LOJINHA_REQUIRE_POSTGRES=1`. Mantenha a conexão e o hash nos segredos do serviço. A URL pública só será confirmada após o serviço terminar a implantação e passar na verificação de saúde.
 
 ## Dados
 
-O disco persistente é montado em `/var/data/lojinha`. Ele mantém o SQLite, as fotos guardadas nos cadastros e as configurações entre reinícios e atualizações. O banco online é independente do banco local.
+Na hospedagem, o banco PostgreSQL mantém os cadastros, fotos, configurações e sessões entre reinícios e atualizações. O banco online é independente do SQLite local. A aplicação online se recusa a iniciar se a conexão com o banco não for configurada, para evitar gravações em um disco temporário.
 
 Depois de entrar na aplicação online, um backup local pode ser restaurado pela área Cópias de Segurança. A publicação inicial não envia automaticamente os dados locais. Sessões e credenciais não estão incluídas nos backups de negócio.
 
 ## Atualizações
 
-O código fica no repositório da aplicação no GitHub. Os dados e credenciais permanecem fora do repositório, inclusive se ele estiver público. Com o Blueprint aprovado e sincronização automática ativa, os envios para a branch configurada iniciam novas implantações. O disco não deve ser removido ou substituído durante as atualizações.
+O código fica no repositório da aplicação no GitHub. Os dados e credenciais permanecem fora do repositório, inclusive se ele estiver público. Com implantação automática ativa, os envios para a branch configurada iniciam novas implantações. Mantenha a mesma conexão PostgreSQL para preservar os dados entre versões.
 
-O modelo atual foi preparado para um responsável e uma única instância. Não aumente o número de instâncias usando o mesmo arquivo SQLite. Para vários usuários ou escala horizontal, será necessário migrar o banco e implementar as permissões correspondentes.
+O modelo atual foi preparado para um responsável e uma única instância. Para acesso individual de vários usuários, será necessário implementar contas e permissões.
 
 ## Verificar antes de publicar
 

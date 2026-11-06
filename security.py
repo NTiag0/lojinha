@@ -59,8 +59,8 @@ class AccessConfig:
         return f'{self.cookie_name}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={0 if clear else SESSION_SECONDS}'+('; Secure' if self.secure else '')
 
 def prepare_tables(c):
-    c.execute('CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires INTEGER NOT NULL)')
-    c.execute('CREATE TABLE IF NOT EXISTS auth_attempts (key TEXT PRIMARY KEY, failures INTEGER NOT NULL, since INTEGER NOT NULL)')
+    c.execute('CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, expires BIGINT NOT NULL)')
+    c.execute('CREATE TABLE IF NOT EXISTS auth_attempts (key TEXT PRIMARY KEY, failures INTEGER NOT NULL, since BIGINT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS auth_config (id INTEGER PRIMARY KEY CHECK(id=1), fingerprint TEXT NOT NULL)')
 
 def sync_config(c,config):
@@ -69,7 +69,7 @@ def sync_config(c,config):
     row=c.execute('SELECT fingerprint FROM auth_config WHERE id=1').fetchone()
     if not row or not hmac.compare_digest(row[0],fingerprint):
         c.execute('DELETE FROM auth_sessions');c.execute('DELETE FROM auth_attempts')
-        c.execute('INSERT OR REPLACE INTO auth_config VALUES(1,?)',(fingerprint,))
+        c.execute('INSERT INTO auth_config (id,fingerprint) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint',(fingerprint,))
 
 def cookie_token(header,config):
     cookie=SimpleCookie()
@@ -96,7 +96,7 @@ def login(c,username,password,peer,config):
     if not (valid and hmac.compare_digest(username.encode(),config.username.encode())):
         failures=row[0]+1 if row and stamp-row[1]<LOCK_SECONDS else 1
         since=row[1] if row and stamp-row[1]<LOCK_SECONDS else stamp
-        c.execute('INSERT OR REPLACE INTO auth_attempts VALUES(?,?,?)',(key,failures,since));return None,'invalid'
+        c.execute('INSERT INTO auth_attempts (key,failures,since) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET failures=excluded.failures,since=excluded.since',(key,failures,since));return None,'invalid'
     c.execute('DELETE FROM auth_attempts WHERE key=?',(key,))
     token=secrets.token_urlsafe(32)
     c.execute('INSERT INTO auth_sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),config.username,stamp+SESSION_SECONDS))

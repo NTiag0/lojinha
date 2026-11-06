@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import math
 import os
-import sqlite3
+import database
 import security
 import threading
 import uuid
@@ -31,25 +31,21 @@ def date(value):
     try: return dt.date.fromisoformat(str(value)[:10]).isoformat()
     except ValueError: raise ValueError('Data inválida.')
 def connect():
-    DATA.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(DATA / 'lojinha.sqlite3', timeout=20)
-    c.execute('PRAGMA journal_mode=WAL')
-    c.execute('CREATE TABLE IF NOT EXISTS records (kind TEXT NOT NULL, id TEXT NOT NULL, doc TEXT NOT NULL, PRIMARY KEY(kind,id))')
-    c.execute('CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), doc TEXT NOT NULL)')
-    c.commit()
-    return c
+    return database.open_connection(DATA)
 @contextmanager
 def transaction():
     c = connect()
     try:
-        c.execute('BEGIN IMMEDIATE')
+        database.begin(c)
         yield c
         c.commit()
     except Exception:
         c.rollback()
         raise
     finally: c.close()
-def all_rows(c, kind): return [json.loads(r[0]) for r in c.execute('SELECT doc FROM records WHERE kind=? ORDER BY rowid DESC', (kind,))]
+def all_rows(c,kind):
+    order='seq' if getattr(c,'postgres',False) else 'rowid'
+    return [json.loads(r[0]) for r in c.execute('SELECT doc FROM records WHERE kind=? ORDER BY '+order+' DESC',(kind,))]
 def get(c, kind, key):
     row = c.execute('SELECT doc FROM records WHERE kind=? AND id=?', (kind,str(key))).fetchone()
     if not row: raise ValueError('Registro não encontrado: ' + kind)
@@ -57,11 +53,13 @@ def get(c, kind, key):
 def put(c, kind, doc):
     doc = dict(doc)
     doc.setdefault('id', uid()); doc.setdefault('createdAt', now()); doc['updatedAt'] = now()
-    c.execute('INSERT INTO records VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET doc=excluded.doc', (kind,doc['id'],json.dumps(doc,ensure_ascii=False)))
+    c.execute('INSERT INTO records (kind,id,doc) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET doc=excluded.doc', (kind,doc['id'],json.dumps(doc,ensure_ascii=False)))
     return doc
 def settings(c):
     r = c.execute('SELECT doc FROM settings WHERE id=1').fetchone()
     return json.loads(r[0]) if r else {}
+def save_settings(c,conf):
+    c.execute('INSERT INTO settings (id,doc) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc',(json.dumps(conf,ensure_ascii=False),))
 def ensure_expense_categories(c):
     conf=settings(c)
     if conf.get('expenseCategoriesVersion',0)>=2: return
@@ -93,10 +91,11 @@ def ensure_expense_categories(c):
             if category['id']==travel['id'] or category.get('parentId')==travel['id']:
                 category['archived']=True;put(c,'financialCategories',category)
     conf['expenseCategoriesVersion']=2
-    c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(conf,ensure_ascii=False),))
+    save_settings(c,conf)
 
 def init():
     with transaction() as c:
+        database.prepare_schema(c)
         if not c.execute('SELECT 1 FROM settings').fetchone():
             conf={'name':'Tiago','company':'Minha Lojinha','receiptMessage':'Obrigado pela preferência!','chargeMessage':'Olá, {cliente}! Há um pagamento de {valor} pendente do pedido {pedido}.','theme':'dark','catalogActive':True,'catalogModel':'grid','catalogColor':'#ed3127','stockPolicy':'soldout','paper':'80','tableMode':'none','minOrder':0}
             c.execute('INSERT INTO settings VALUES(1,?)',(json.dumps(conf),))
@@ -127,13 +126,14 @@ def restore_backup(c, backup):
     current={'version':1,'settings':settings(c),'records':{k:all_rows(c,k) for k in ENTITIES}}
     stamp=dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uid()
     c.execute('INSERT INTO restore_history VALUES(?,?)',(stamp,json.dumps(current,ensure_ascii=False)))
-    backup_dir=DATA/'backups';backup_dir.mkdir(exist_ok=True)
-    target=backup_dir/('antes-restauracao-'+stamp+'.json')
-    target.write_text(json.dumps(current,ensure_ascii=False),encoding='utf-8')
+    if not getattr(c,'postgres',False):
+        backup_dir=DATA/'backups';backup_dir.mkdir(exist_ok=True)
+        target=backup_dir/('antes-restauracao-'+stamp+'.json')
+        target.write_text(json.dumps(current,ensure_ascii=False),encoding='utf-8')
     c.execute('DELETE FROM records')
     for kind,rows in records.items():
         for row in rows: put(c,kind,row)
-    c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(backup['settings'],ensure_ascii=False),))
+    save_settings(c,backup['settings'])
     ensure_expense_categories(c)
     return {'ok':True}
 def stock(c, product_id, delta, reason, ref='', variant=''):
@@ -298,7 +298,7 @@ def dispatch(c, path, data):
     parts=path.strip('/').split('/')[1:]
     if parts==['restore']: return restore_backup(c,data.get('backup'))
     if parts==['settings']:
-        s={**settings(c),**data};c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(s,ensure_ascii=False),));return s
+        s={**settings(c),**data};save_settings(c,s);return s
     if parts==['orders']: return order_create(c,data)
     if len(parts)==3 and parts[0]=='orders':
         key,action=parts[1:]
@@ -413,13 +413,19 @@ class Handler(BaseHTTPRequestHandler):
         if path not in public and not self.is_authenticated():
             if path.startswith('/api/'):return self.respond(401,{'error':'Entre na sua conta para continuar.'})
             return self.respond(303,b'','text/plain',headers=[('Location','/login')])
+        if path=='/api/backup/previous':
+            with transaction() as c: row=c.execute('SELECT snapshot FROM restore_history ORDER BY id DESC LIMIT 1').fetchone()
+            if not row:return self.respond(404,{'error':'Ainda não há restauração anterior.'})
+            return self.respond(200,json.loads(row[0]),attachment='lojinha-antes-da-restauracao.json')
         if path in ['/api/state','/api/backup']:
             with transaction() as c:
                 records={k:all_rows(c,k) for k in ENTITIES}
                 for cash in records['cash']:
                     if cash['status']=='Aberto': cash['expected']=expected_cash(c,cash)
                 state={'version':1,'settings':settings(c),'records':records}
-                if path=='/api/state':state['auth']={'enabled':self.access.required,'username':self.access.username if self.access.required else ''}
+                if path=='/api/state':
+                    state['auth']={'enabled':self.access.required,'username':self.access.username if self.access.required else ''}
+                    state['storage']='postgres' if getattr(c,'postgres',False) else 'sqlite'
             return self.respond(200,state,attachment='lojinha-backup-'+dt.date.today().isoformat()+'.json' if path.endswith('backup') else None)
         files={'/':'index.html','/login':'login.html','/login.js':'login.js','/app.js':'app.js','/branding.js':'branding.js','/style.css':'style.css','/favicon.svg':'favicon.svg'}
         if path not in files: return self.respond(404,{'error':'Página não encontrada.'})

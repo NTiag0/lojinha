@@ -81,6 +81,6 @@ Os testes usam bancos temporários e cobrem integridade de estoque, pagamentos p
 - `tests/`: testes com dados temporários.
 - `iniciar.bat`: abertura da aplicação no Windows.
 
-Para a versão hospedada, consulte PUBLICAR.md. O modo de publicação exige origem HTTPS, credenciais do responsável e armazenamento persistente.
+Para a versão hospedada, consulte PUBLICAR.md. O modo de publicação exige origem HTTPS, credenciais do responsável e banco PostgreSQL persistente.
 
 A versão hospedada inclui login e saída, sessão com expiração, cookies protegidos e limite de tentativas de acesso. Os dados locais não são publicados junto com o código.

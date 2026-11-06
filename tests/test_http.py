@@ -27,6 +27,12 @@ class HTTPTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:self.request('/api/clients',{'name':'Indevido'},{'Origin':'https://outro-site.example'})
         self.assertEqual(error.exception.code,403)
         with self.request('/api/state') as r:self.assertEqual(json.load(r)['records']['clients'],[])
+    def test_previous_restore_is_downloadable(self):
+        with self.request('/api/backup') as r:baseline=json.load(r)
+        with self.request('/api/clients',{'name':'Registro recuperável'}) as r:client=json.load(r)
+        with self.request('/api/restore',{'backup':baseline}) as r:self.assertTrue(json.load(r)['ok'])
+        with self.request('/api/backup/previous') as r:
+            self.assertEqual(json.load(r)['records']['clients'][0]['id'],client['id'])
     def test_invalid_host_rejected(self):
         with self.assertRaises(urllib.error.HTTPError) as error:self.request('/api/state',headers={'Host':'outro-site.example'})
         self.assertEqual(error.exception.code,403)

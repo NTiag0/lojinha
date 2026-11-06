@@ -31,7 +31,7 @@ class SecurityTests(unittest.TestCase):
             cookie=response.headers['Set-Cookie'];self.assertIn('HttpOnly',cookie);self.assertIn('SameSite=Strict',cookie)
             self.assertNotIn('token',json.load(response))
     def test_anonymous_users_cannot_read_or_write_business_data(self):
-        for path,data,method in [('/api/state',None,None),('/api/backup',None,None),('/api/clients',{'name':'Blocked'},None),('/api/clients/missing',{},'DELETE')]:
+        for path,data,method in [('/api/state',None,None),('/api/backup',None,None),('/api/backup/previous',None,None),('/api/clients',{'name':'Blocked'},None),('/api/clients/missing',{},'DELETE')]:
             with self.assertRaises(urllib.error.HTTPError) as error:self.request(path,data,method=method)
             self.assertEqual(error.exception.code,401)
         with self.request('/') as response:self.assertTrue(response.geturl().endswith('/login'));self.assertIn(b'loginform',response.read())
@@ -77,5 +77,8 @@ class SecurityTests(unittest.TestCase):
         secure=security.AccessConfig(True,'https://shop.example','tiago',self.encoded)
         self.assertIn('Secure',secure.cookie('some-token'));self.assertTrue(secure.cookie_name.startswith('__Host-'))
         self.assertTrue(secure.host_allowed('shop.example',10000));self.assertFalse(secure.host_allowed('attacker.example',10000))
+    def test_cloud_configuration_never_falls_back_to_local_disk(self):
+        with patch.dict('os.environ',{'LOJINHA_REQUIRE_POSTGRES':'1','LOJINHA_DATABASE_URL':''},clear=True):
+            with self.assertRaisesRegex(RuntimeError,'LOJINHA_DATABASE_URL'):app.connect()
 
 if __name__=='__main__':unittest.main()
